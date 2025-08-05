@@ -1,0 +1,460 @@
+# PIPELINE DEFINITION
+# Name: iris-classification-pipeline-fixed
+# Description: End-to-end ML pipeline that works around metadata tracking issues
+# Inputs:
+#    accuracy_threshold: float [Default: 0.85]
+#    f1_threshold: float [Default: 0.85]
+#    model_name: str [Default: 'iris-classifier']
+#    model_version: str [Default: 'v1.0.0']
+#    n_estimators: int [Default: 100.0]
+#    random_state: int [Default: 42.0]
+#    test_size: float [Default: 0.2]
+components:
+  comp-prepare-model-serving:
+    executorLabel: exec-prepare-model-serving
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        scaler:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        deploy_decision:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        serving_uri:
+          parameterType: STRING
+  comp-register-model:
+    executorLabel: exec-register-model
+    inputDefinitions:
+      artifacts:
+        evaluation_report:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        deploy_decision:
+          parameterType: STRING
+        model_name:
+          parameterType: STRING
+        model_version:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        registry_entry:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-setup-drift-monitoring:
+    executorLabel: exec-setup-drift-monitoring
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        deploy_decision:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        monitoring_config:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-train-and-evaluate-iris:
+    executorLabel: exec-train-and-evaluate-iris
+    inputDefinitions:
+      parameters:
+        accuracy_threshold:
+          parameterType: NUMBER_DOUBLE
+        f1_threshold:
+          parameterType: NUMBER_DOUBLE
+        n_estimators:
+          parameterType: NUMBER_INTEGER
+        random_state:
+          parameterType: NUMBER_INTEGER
+        test_size:
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      artifacts:
+        evaluation_report:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        scaler:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-prepare-model-serving:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - prepare_model_serving
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'minio==7.2.10'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef prepare_model_serving(\n    model: Input[Model],\n    scaler:\
+          \ Input[Artifact],\n    deploy_decision: str,\n    serving_uri: OutputPath(str)\n\
+          ) -> None:\n    \"\"\"\n    Prepare model for serving with KServe.\n\n \
+          \   This component packages the model and uploads to storage.\n    \"\"\"\
+          \n    import os\n    import shutil\n    from pathlib import Path\n\n   \
+          \ print(f\"Preparing model for serving (deploy decision: {deploy_decision})...\"\
+          )\n\n    if deploy_decision != \"deploy\":\n        print(\"Model not approved\
+          \ for deployment\")\n        with open(serving_uri, 'w') as f:\n       \
+          \     f.write(\"not-deployed\")\n        return\n\n    # Create serving\
+          \ directory\n    serving_path = Path(\"/tmp/model_serving\")\n    serving_path.mkdir(parents=True,\
+          \ exist_ok=True)\n\n    # Copy model artifacts\n    shutil.copy(model.path,\
+          \ serving_path / \"model.pkl\")\n    shutil.copy(scaler.path, serving_path\
+          \ / \"scaler.pkl\")\n\n    # In production, upload to S3/GCS/MinIO\n   \
+          \ # For now, just save the local path\n    with open(serving_uri, 'w') as\
+          \ f:\n        f.write(str(serving_path))\n\n    print(f\"Model prepared\
+          \ for serving at: {serving_path}\")\n\n"
+        image: python:3.11-slim
+    exec-register-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - register_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pydantic==2.11.0'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.14.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef register_model(\n    model: Input[Model],\n    evaluation_report:\
+          \ Input[Artifact],\n    deploy_decision: str,\n    model_name: str,\n  \
+          \  model_version: str,\n    registry_entry: Output[Artifact]\n) -> None:\n\
+          \    \"\"\"\n    Register model in the model registry.\n\n    Creates model\
+          \ registry entry with metadata.\n    \"\"\"\n    import json\n    from datetime\
+          \ import datetime\n\n    print(f\"Registering model: {model_name} v{model_version}\
+          \ (deploy: {deploy_decision})\")\n\n    # Load evaluation report\n    with\
+          \ open(evaluation_report.path, 'r') as f:\n        eval_report = json.load(f)\n\
+          \n    # Create registry entry\n    registry_metadata = {\n        \"model_name\"\
+          : model_name,\n        \"model_version\": model_version,\n        \"model_path\"\
+          : model.path,\n        \"registered_at\": datetime.now().isoformat(),\n\
+          \        \"framework\": \"scikit-learn\",\n        \"algorithm\": \"RandomForestClassifier\"\
+          ,\n        \"metrics\": {\n            \"accuracy\": eval_report[\"accuracy\"\
+          ],\n            \"f1_score\": eval_report[\"f1_score\"],\n            \"\
+          train_accuracy\": eval_report[\"train_accuracy\"],\n            \"test_accuracy\"\
+          : eval_report[\"test_accuracy\"]\n        },\n        \"status\": \"production-ready\"\
+          \ if deploy_decision == \"deploy\" else \"evaluation-only\",\n        \"\
+          deployed\": deploy_decision == \"deploy\",\n        \"tags\": [\"iris\"\
+          , \"classification\", \"ml-pipeline\"]\n    }\n\n    # Save registry entry\n\
+          \    with open(registry_entry.path, 'w') as f:\n        json.dump(registry_metadata,\
+          \ f, indent=2)\n\n    print(f\"Model registered successfully\")\n\n"
+        image: python:3.11-slim
+    exec-setup-drift-monitoring:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - setup_drift_monitoring
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'evidently==0.4.40'\
+          \ 'pandas==2.2.3' 'scikit-learn==1.5.2'  &&  python3 -m pip install --quiet\
+          \ --no-warn-script-location 'kfp==2.14.1' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef setup_drift_monitoring(\n    model: Input[Model],\n    deploy_decision:\
+          \ str,\n    monitoring_config: Output[Artifact]\n) -> None:\n    \"\"\"\n\
+          \    Setup drift monitoring configuration.\n\n    Creates baseline data\
+          \ and monitoring configuration.\n    \"\"\"\n    import json\n    import\
+          \ pandas as pd\n    from sklearn.datasets import load_iris\n    from sklearn.model_selection\
+          \ import train_test_split\n\n    print(f\"Setting up drift monitoring (deploy\
+          \ decision: {deploy_decision})...\")\n\n    if deploy_decision != \"deploy\"\
+          :\n        print(\"Model not deployed, skipping monitoring setup\")\n  \
+          \      config = {\"status\": \"not-deployed\"}\n    else:\n        # Load\
+          \ data for baseline\n        iris = load_iris()\n        X = pd.DataFrame(iris.data,\
+          \ columns=iris.feature_names)\n        y = pd.Series(iris.target)\n\n  \
+          \      # Use training data as baseline\n        X_train, _, y_train, _ =\
+          \ train_test_split(\n            X, y, test_size=0.2, random_state=42, stratify=y\n\
+          \        )\n\n        # Create monitoring configuration\n        config\
+          \ = {\n            \"baseline_size\": len(X_train),\n            \"features\"\
+          : list(iris.feature_names),\n            \"drift_threshold\": 0.5,\n   \
+          \         \"monitoring_frequency\": \"daily\",\n            \"alert_channels\"\
+          : [\"email\", \"slack\"],\n            \"status\": \"active\"\n        }\n\
+          \n    # Save configuration\n    with open(monitoring_config.path, 'w') as\
+          \ f:\n        json.dump(config, f, indent=2)\n\n    print(\"Drift monitoring\
+          \ configured\")\n\n"
+        image: python:3.11-slim
+    exec-train-and-evaluate-iris:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_and_evaluate_iris
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'scikit-learn==1.5.2'\
+          \ 'pandas==2.2.3' 'numpy==1.26.4' 'minio==7.2.10'  &&  python3 -m pip install\
+          \ --quiet --no-warn-script-location 'kfp==2.14.1' '--no-deps' 'typing-extensions>=3.7.4,<5;\
+          \ python_version<\"3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_and_evaluate_iris(\n    n_estimators: int,\n    test_size:\
+          \ float,\n    random_state: int,\n    accuracy_threshold: float,\n    f1_threshold:\
+          \ float,\n    model: Output[Model],\n    scaler: Output[Artifact],\n   \
+          \ metrics: Output[Metrics],\n    evaluation_report: Output[Artifact]\n)\
+          \ -> str:\n    \"\"\"\n    Combined training and evaluation component to\
+          \ avoid metadata tracking issues.\n\n    Returns:\n        str: \"deploy\"\
+          \ or \"no-deploy\" based on thresholds\n    \"\"\"\n    import json\n  \
+          \  import pickle\n    from pathlib import Path\n    import pandas as pd\n\
+          \    from sklearn.datasets import load_iris\n    from sklearn.ensemble import\
+          \ RandomForestClassifier\n    from sklearn.model_selection import train_test_split\n\
+          \    from sklearn.preprocessing import StandardScaler\n    from sklearn.metrics\
+          \ import accuracy_score, f1_score, classification_report\n\n    print(f\"\
+          Training model with {n_estimators} estimators\")\n\n    # Load data\n  \
+          \  iris = load_iris()\n    X = pd.DataFrame(iris.data, columns=iris.feature_names)\n\
+          \    y = pd.Series(iris.target)\n\n    # Split data\n    X_train, X_test,\
+          \ y_train, y_test = train_test_split(\n        X, y, test_size=test_size,\
+          \ random_state=random_state, stratify=y\n    )\n\n    # Scale features\n\
+          \    scaler_obj = StandardScaler()\n    X_train_scaled = scaler_obj.fit_transform(X_train)\n\
+          \    X_test_scaled = scaler_obj.transform(X_test)\n\n    # Train model\n\
+          \    rf_model = RandomForestClassifier(\n        n_estimators=n_estimators,\n\
+          \        random_state=random_state\n    )\n    rf_model.fit(X_train_scaled,\
+          \ y_train)\n\n    # Calculate training metrics\n    train_score = rf_model.score(X_train_scaled,\
+          \ y_train)\n    test_score = rf_model.score(X_test_scaled, y_test)\n\n \
+          \   # Save model and scaler\n    Path(model.path).parent.mkdir(parents=True,\
+          \ exist_ok=True)\n    with open(model.path, 'wb') as f:\n        pickle.dump(rf_model,\
+          \ f)\n\n    Path(scaler.path).parent.mkdir(parents=True, exist_ok=True)\n\
+          \    with open(scaler.path, 'wb') as f:\n        pickle.dump(scaler_obj,\
+          \ f)\n\n    # Evaluate model\n    print(\"Evaluating model performance...\"\
+          )\n    y_pred = rf_model.predict(X_test_scaled)\n\n    # Calculate evaluation\
+          \ metrics\n    accuracy = accuracy_score(y_test, y_pred)\n    f1 = f1_score(y_test,\
+          \ y_pred, average='weighted')\n\n    # Log all metrics\n    metrics.log_metric(\"\
+          train_accuracy\", train_score)\n    metrics.log_metric(\"test_accuracy\"\
+          , test_score)\n    metrics.log_metric(\"n_features\", X.shape[1])\n    metrics.log_metric(\"\
+          n_training_samples\", len(X_train))\n    metrics.log_metric(\"evaluation_accuracy\"\
+          , accuracy)\n    metrics.log_metric(\"evaluation_f1_score\", f1)\n    metrics.log_metric(\"\
+          accuracy_threshold\", accuracy_threshold)\n    metrics.log_metric(\"f1_threshold\"\
+          , f1_threshold)\n\n    # Make deployment decision\n    deploy = accuracy\
+          \ >= accuracy_threshold and f1 >= f1_threshold\n    deploy_decision = \"\
+          deploy\" if deploy else \"no-deploy\"\n\n    metrics.log_metric(\"deployment_decision\"\
+          , 1 if deploy else 0)\n\n    # Generate evaluation report\n    report =\
+          \ {\n        \"train_accuracy\": train_score,\n        \"test_accuracy\"\
+          : test_score,\n        \"accuracy\": accuracy,\n        \"f1_score\": f1,\n\
+          \        \"accuracy_threshold\": accuracy_threshold,\n        \"f1_threshold\"\
+          : f1_threshold,\n        \"deploy_decision\": deploy_decision,\n       \
+          \ \"classification_report\": classification_report(\n            y_test,\
+          \ y_pred, \n            target_names=iris.target_names.tolist(),\n     \
+          \       output_dict=True\n        )\n    }\n\n    # Save report\n    with\
+          \ open(evaluation_report.path, 'w') as f:\n        json.dump(report, f,\
+          \ indent=2)\n\n    print(f\"Training complete - Test accuracy: {test_score:.4f}\"\
+          )\n    print(f\"Evaluation complete - Deploy: {deploy_decision}\")\n\n \
+          \   return deploy_decision\n\n"
+        image: python:3.11-slim
+pipelineInfo:
+  description: End-to-end ML pipeline that works around metadata tracking issues
+  name: iris-classification-pipeline-fixed
+root:
+  dag:
+    tasks:
+      prepare-model-serving:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-prepare-model-serving
+        dependentTasks:
+        - train-and-evaluate-iris
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-and-evaluate-iris
+            scaler:
+              taskOutputArtifact:
+                outputArtifactKey: scaler
+                producerTask: train-and-evaluate-iris
+          parameters:
+            deploy_decision:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: train-and-evaluate-iris
+        taskInfo:
+          name: prepare-model-serving
+      register-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-register-model
+        dependentTasks:
+        - train-and-evaluate-iris
+        inputs:
+          artifacts:
+            evaluation_report:
+              taskOutputArtifact:
+                outputArtifactKey: evaluation_report
+                producerTask: train-and-evaluate-iris
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-and-evaluate-iris
+          parameters:
+            deploy_decision:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: train-and-evaluate-iris
+            model_name:
+              componentInputParameter: model_name
+            model_version:
+              componentInputParameter: model_version
+        taskInfo:
+          name: register-model
+      setup-drift-monitoring:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-setup-drift-monitoring
+        dependentTasks:
+        - train-and-evaluate-iris
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-and-evaluate-iris
+          parameters:
+            deploy_decision:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: train-and-evaluate-iris
+        taskInfo:
+          name: setup-drift-monitoring
+      train-and-evaluate-iris:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-and-evaluate-iris
+        inputs:
+          parameters:
+            accuracy_threshold:
+              componentInputParameter: accuracy_threshold
+            f1_threshold:
+              componentInputParameter: f1_threshold
+            n_estimators:
+              componentInputParameter: n_estimators
+            random_state:
+              componentInputParameter: random_state
+            test_size:
+              componentInputParameter: test_size
+        taskInfo:
+          name: train-and-evaluate-iris
+  inputDefinitions:
+    parameters:
+      accuracy_threshold:
+        defaultValue: 0.85
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      f1_threshold:
+        defaultValue: 0.85
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      model_name:
+        defaultValue: iris-classifier
+        isOptional: true
+        parameterType: STRING
+      model_version:
+        defaultValue: v1.0.0
+        isOptional: true
+        parameterType: STRING
+      n_estimators:
+        defaultValue: 100.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      random_state:
+        defaultValue: 42.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      test_size:
+        defaultValue: 0.2
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.14.1

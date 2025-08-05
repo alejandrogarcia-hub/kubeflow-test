@@ -1,0 +1,16 @@
+{
+  "model_type": "RandomForestClassifier",
+  "n_estimators": 10,
+  "n_features": 4,
+  "feature_names": [
+    "sepal length (cm)",
+    "sepal width (cm)",
+    "petal length (cm)",
+    "petal width (cm)"
+  ],
+  "classes": [
+    0,
+    1,
+    2
+  ]
+}
