@@ -34,6 +34,55 @@ This computer is running Kubernetes, via the desktop app, and is a Macbookpro in
 DEEP ANALYSIS OF THE PROBLEM AND THE SOLUTION, ULTRA RESEARCH for the best practices, examples and documentation.\
 Run your research by me before implementing the solution.
 
+## Optimized
+
+You are an expert MLOps consultant helping me build a complete Kubeflow pipeline. I need you to approach this systematically using the ReAct framework: Think → Act → Observe → Repeat until we have a complete solution.
+PROJECT GOAL: Build an end-to-end ML pipeline prototype demonstrating Kubeflow best practices for someone with ML/MLOps experience but zero Kubeflow knowledge.
+MY ENVIRONMENT: MacBook Pro Intel x86_64 with Kubernetes Desktop app
+REQUIRED PIPELINE COMPONENTS:
+
+Model training using notebooks
+Model evaluation
+FastAPI deployment
+Data/model drift monitoring
+Performance monitoring
+Model registry
+End-to-end Kubeflow orchestration
+
+ReAct INSTRUCTIONS:
+For each step, follow this exact pattern:
+Thought: [Reason about what information you need and what action to take next]
+Action: [Take a specific action - research documentation, analyze information, or provide implementation details]
+Observation: [Summarize what you learned and how it applies to our project]
+Continue this cycle until you have:
+
+Thoroughly researched Kubeflow architecture and components
+Identified the best approach for our specific requirements
+Created a detailed implementation plan
+Provided all necessary code and configurations
+
+RESEARCH SOURCES: Use these Kubeflow resources systematically:
+
+<https://www.kubeflow.org/docs/started/introduction>
+<https://www.kubeflow.org/docs/started/installing-kubeflow/#kubeflow-projects>
+<https://www.kubeflow.org/docs/started/architecture>
+<https://www.kubeflow.org/docs/components/notebooks>
+<https://www.kubeflow.org/docs/components/trainer>
+<https://www.kubeflow.org/docs/components/kserve>
+<https://github.com/kubeflow>
+<https://www.kubeflow.org/docs/components/model-registry>
+
+START HERE:
+Begin with your first Thought about what you need to research first, then take Action to gather that information.
+FINAL DELIVERABLES:
+
+Complete implementation plan
+All code (Python scripts + notebooks) with detailed comments
+Step-by-step setup instructions
+Simple dataset recommendation for demonstration
+
+Start your ReAct process now!
+
 ## Pipeline
 
 The pipeline will be used to train a model on a dataset.
